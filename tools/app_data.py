@@ -2,6 +2,7 @@ import tools.utils as utils
 from pathlib import Path
 from enum import Enum
 import shutil
+import os
 
 
 class DumpUtility(Enum):
@@ -64,6 +65,7 @@ def read_up_file() -> list:
 def save_up_file(usr: str, pwd: str):
     global UP_FILE
     utils.write_file(UP_FILE, usr + "\n" + pwd)
+    os.chmod(UP_FILE, 0o600)
 
 
 def does_clutch_exist() -> bool:

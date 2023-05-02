@@ -72,6 +72,15 @@ def read_plist_file(file_path: Path) -> dict:
         return dict()
 
 
+def write_plist_file(file_path: Path, data: dict) -> bool:
+    try:
+        with open(file_path, "wb") as file:
+            plistlib.dumps()
+            return True
+    except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError, TypeError, OverflowError):
+        return False
+
+
 def enumerate_app_list(apps: list) -> list:
     enumerated_apps = ""
     enumerated_apps_as_options = list()

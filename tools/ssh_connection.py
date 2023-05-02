@@ -6,6 +6,8 @@ import tools.ios_app as ios_apps
 import paramiko
 import socket
 import tools.utils as utils
+import getpass
+import plistlib
 from paramiko.channel import ChannelFile
 from socket import gaierror
 from time import sleep
@@ -98,7 +100,7 @@ def setup_connection(ask_to_setup_new_idevice=True) -> list:
                     continue
 
                 print("\nEnter your password")
-                password = input("> ")
+                password = getpass.getpass("> ")
 
         try:
             print("\nTrying connection... ", end="", flush=True)
@@ -226,32 +228,42 @@ def install_bfdecrypt(client: paramiko.SSHClient) -> bool:
 
 
 def is_bfdecrypt_installed(client: paramiko.SSHClient) -> bool:
+    attempts = 0
+    found_ms_dir = False
     while True:
-        try:
-            ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(
-                f"cd {ios_apps.MOBILE_SUBSTRATE_PATH_ROOT}; ls"
-            )
+        if not found_ms_dir and attempts < len(ios_apps.MOBILE_SUBSTRATE_PATHS):
+            try:
+                ms_dir = ios_apps.MOBILE_SUBSTRATE_PATHS[attempts]
+                ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(
+                    f"cd {ms_dir}; ls"
+                )
 
-            error = read_output(ssh_stderr)
-            if "No such file or directory" in error:
-                raise FileNotFoundError("Not root access")
-        except FileNotFoundError:  # Rootless jailbreak
-            ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(
-                f"cd {ios_apps.MOBILE_SUBSTRATE_PATH_ROOTLESS}; ls"
-            )
+                error = read_output(ssh_stderr)
+                if "no such file or directory" in error.lower():
+                    raise FileNotFoundError
+                else:
+                    found_ms_dir = True
+            except FileNotFoundError:
+                attempts+=1
+                continue
 
-        output = read_output(ssh_stdout)
-        if ios_apps.MS_BFDECRYPT_SETTINGS in output:
-            return True
-
-        utils.clear_terminal()
-        print("  bfdecrypt is not installed...")
-        print("1. Look up for bfdecrypt again")
+        if found_ms_dir:
+            output = read_output(ssh_stdout)
+            if ios_apps.MS_BFDECRYPT_SETTINGS in output:
+                return True
+            else:
+                print("Failed to find the bfdecrypt settings file! Are you sure it is installed?")
+        else:
+            print("Failed to find the MobileSubstrate directory!")
+        
+        print("\n1. Attempt to find bfdecrypt again")
         print("2. Install bfdecrypt")
         print("3. Cancel")
         print("Select an option")
         option = utils.choose(["1", "2", "3"])
 
+        attempts = 0
+        found_ms_dir = False
         if option == "1":
             continue
         elif option == "2":
@@ -262,8 +274,8 @@ def is_bfdecrypt_installed(client: paramiko.SSHClient) -> bool:
 
 
 def is_idevice_ready(client: paramiko.SSHClient) -> bool:
-    check_clutch = "CLUTCH" in app_data.decrypt_method
-    check_bfdecrypt = "BFDECRYPT" in app_data.decrypt_method
+    check_clutch = app_data.DumpUtility.CLUTCH.name in app_data.decrypt_method
+    check_bfdecrypt = app_data.DumpUtility.BFDECRYPT.name in app_data.decrypt_method
 
     ready = True
     if check_clutch:
@@ -405,7 +417,7 @@ def decrypt_app_with_clutch(client: paramiko.SSHClient, app: ios_apps.AppInfo) -
     return ""
 
 
-def modify_bfdecrypt_plist(client: paramiko.SSHClient, apps: list):
+def modify_bfdecrypt_plist(client: paramiko.SSHClient, apps: list) -> bool:
     sftp_client = client.open_sftp()
 
     bfdecrypt_settings = ios_apps.LOCAL_CACHE_DIR.joinpath(ios_apps.BFDECRYPT_SETTINGS)
@@ -413,25 +425,49 @@ def modify_bfdecrypt_plist(client: paramiko.SSHClient, apps: list):
     settings_file = sftp_client.open(ios_apps.BFDECRYPT_SETTINGS_F, "rb")
     utils.write_binary_file(bfdecrypt_settings, settings_file.read())
 
-    file_content = utils.read_file(bfdecrypt_settings)
-    bfdecrypt_bundle = "<array>\n"
+    file_content = utils.read_plist_file(bfdecrypt_settings)
+    selected_apps = []
     for app in apps:
-        bfdecrypt_bundle += f"\t\t<string>{app.app_bundle}</string>\n"
+        selected_apps.append(app.app_bundle)
+    file_content['selectedApplications'] = selected_apps
 
-    if not apps:
-        bfdecrypt_bundle += "\n"
-
-    bfdecrypt_bundle += "\t</array>"
-
-    file_content = sub(r"<array>[\w\W]+</array>", bfdecrypt_bundle, file_content)
-    utils.write_file(bfdecrypt_settings, file_content)
-    sftp_client.put(bfdecrypt_settings, ios_apps.BFDECRYPT_SETTINGS_F)
-    try:
-        sftp_client.put(bfdecrypt_settings, ios_apps.MS_SETTINGS_ROOT_F)
-    except FileNotFoundError:  # Jailbreak is rootless
-        sftp_client.put(bfdecrypt_settings, ios_apps.MS_SETTINGS_ROOTLESS_F)
+    success = False
+    if utils.write_binary_file(bfdecrypt_settings, plistlib.dumps(file_content)):
+        sftp_client.put(bfdecrypt_settings, ios_apps.BFDECRYPT_SETTINGS_F)
+        
+        attempts = 0
+        while attempts < len(ios_apps.MS_BFDECRYPT_SETTINGS_F):
+            ms_bfdecrypt_settings_f = ios_apps.MS_BFDECRYPT_SETTINGS_F[attempts]
+            try:
+                sftp_client.put(bfdecrypt_settings, ms_bfdecrypt_settings_f)
+                success = True
+                break
+            except FileNotFoundError:
+                attempts+=1
+            except PermissionError:
+                if fix_bfdecrypt_permissions(client, ms_bfdecrypt_settings_f):
+                    continue
+                else:
+                    break
 
     disconnect_sftp(sftp_client)
+    return success
+
+
+def fix_bfdecrypt_permissions(client: paramiko.SSHClient, ms_bfdecrypt_settings_f: str) -> bool:
+    ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(
+        f"sudo chmod o+w {ms_bfdecrypt_settings_f}", get_pty=True
+    )
+
+    print("\nEnter the sudo password")
+    password = getpass.getpass("> ")
+    ssh_stdin.write(password + '\n')
+    ssh_stdin.flush()
+
+    output = read_output(ssh_stderr)
+    if output and len(output) > 0:
+        return False
+    return True
 
 
 def revert_plist(client: paramiko.SSHClient):  # Revert to avoid re-decrypting if user opens normally
@@ -450,40 +486,33 @@ def decrypt_app_with_bfdecrypt(client: paramiko.SSHClient, app: ios_apps.AppInfo
 
     documents_path = f"{ios_apps.APPLICATION_DOCUMENTS + app.docs_bundle_id}/Documents/"
 
-    timeout = 0
-    last_directory_size = 0
-    directory_size = 0
+    retries = 0
+    last_ipa_size = 0
+    consecutive_same_sizes = 0
     decrypted = False
 
     sleep(3)
     client.exec_command(f"uiopen --bundleid {app.app_bundle}")
 
-    while timeout < 30:
-        ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"cd {documents_path}; ls")
-        output = read_output(ssh_stdout)
-        if "decrypted-app.ipa" in output:
-            decrypted = True
-            break
-        if "ipa" in output and "decrypted-app-temp.ipa" not in output:
-            ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"du -hs {documents_path}/ipa")
-            s_output = read_output(ssh_stdout)
-            new_dir_size = findall(r"\d+", s_output)
-            if new_dir_size:
-                directory_size = int(new_dir_size[0])
-
-        if directory_size == last_directory_size:
-            timeout += 1
-        else:
-            last_directory_size = directory_size
-
-        sleep(1)
-
-    client.exec_command(f"rm {documents_path}/decrypted-app-temp.ipa")
-    client.exec_command(f"rm -fr {documents_path}/ipa")
+    while retries < 30:
+        ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"du {documents_path}/{ios_apps.BFDECRYPT_IPA_NAME}")
+        s_output = read_output(ssh_stdout)
+        next_ipa_size = findall(r"\d+", s_output)
+        if next_ipa_size and len(next_ipa_size) > 0:
+            if last_ipa_size == int(next_ipa_size[0]):
+                consecutive_same_sizes+=1
+                if consecutive_same_sizes == 3:
+                    decrypted = True
+                    break
+            else:
+                last_ipa_size = int(next_ipa_size[0])
+            print(f"File size: {int(next_ipa_size[0])}")
+        retries+=1
+        sleep(3)
 
     if decrypted:
         client.exec_command(f"killall \"{app.app_executable}\"")
-        return documents_path + "/decrypted-app.ipa"
+        return f"{documents_path}/{ios_apps.BFDECRYPT_IPA_NAME}"
 
     return ""
 
@@ -492,7 +521,7 @@ def download_app(client: paramiko.SSHClient, app: ios_apps.AppInfo, ipa_path: st
     if not app_data.DOWNLOADED_APPS.exists():
         app_data.DOWNLOADED_APPS.mkdir()
 
-    local_file_name = app_data.DOWNLOADED_APPS.joinpath(app.app_name.replace(" ", "_") + "_" + app.app_version + ".ipa")
+    local_file_name = app_data.DOWNLOADED_APPS.joinpath(app.app_executable.replace(" ", "_") + "_" + app.app_version + ".ipa")
 
     sftp_client = client.open_sftp()
     try:
@@ -508,58 +537,66 @@ def download_app(client: paramiko.SSHClient, app: ios_apps.AppInfo, ipa_path: st
 
 def dump_app(client: paramiko.SSHClient, app: ios_apps.AppInfo, multiple_apps: bool):
     utils.clear_terminal()
-    print(f"Preparing to dump {app.app_name} [{app.app_version}]... ")
+    print(f"Preparing to dump \"{app.app_name}\" ({app.app_version})...")
 
-    if not multiple_apps and "BFDECRYPT" in app_data.decrypt_method:
-        modify_bfdecrypt_plist(client, [app])
+    modify_plist_success = True
+    if not multiple_apps and app_data.DumpUtility.BFDECRYPT.name in app_data.decrypt_method:
+        modify_plist_success = modify_bfdecrypt_plist(client, [app])
 
-    ipa_path = ""
-    attempt_clutch_first = app_data.decrypt_method.startswith("CLUTCH")
-    clutch_attempted = False
-    bfdecrypt_attempted = False
+    if modify_plist_success:
+        ipa_path = ""
+        attempt_clutch_first = app_data.decrypt_method.startswith(app_data.DumpUtility.CLUTCH.name)
+        clutch_attempted = False
+        bfdecrypt_attempted = False
 
-    attempts = 0
-    if "CLUTCH" in app_data.decrypt_method:
-        attempts += 1
+        attempts = 0
+        if app_data.DumpUtility.CLUTCH.name in app_data.decrypt_method:
+            attempts += 1
 
-    if "BFDECRYPT" in app_data.decrypt_method:
-        attempts += 1
+        if app_data.DumpUtility.BFDECRYPT.name in app_data.decrypt_method:
+            attempts += 1
 
-    for _ in range(attempts):  # Two attempts to decrypt as maximum
-        if not clutch_attempted and "CLUTCH" in app_data.decrypt_method and attempt_clutch_first:
-            print(f"Dumping {app.app_bundle} (CLUTCH)... ", end="", flush=True)
+        for _ in range(attempts):  # Two attempts to decrypt as maximum
+            if not clutch_attempted and app_data.DumpUtility.CLUTCH.name in app_data.decrypt_method and attempt_clutch_first:
+                print(f"Dumping {app.app_bundle} ({app_data.DumpUtility.CLUTCH.name})...", end="", flush=True)
 
-            clutch_attempted = True
-            ipa_path = decrypt_app_with_clutch(client, app)
-        elif not bfdecrypt_attempted and "BFDECRYPT" in app_data.decrypt_method:
-            print(f"Dumping {app.app_bundle} (BFDECRYPT)... ", end="", flush=True)
+                clutch_attempted = True
+                ipa_path = decrypt_app_with_clutch(client, app)
+            elif not bfdecrypt_attempted and app_data.DumpUtility.BFDECRYPT.name in app_data.decrypt_method:
+                print(f"Dumping {app.app_bundle} ({app_data.DumpUtility.BFDECRYPT.name})...\n", end="", flush=True)
 
-            attempt_clutch_first = True  # Just in case if clutch is secondly tried
-            bfdecrypt_attempted = True
-            ipa_path = decrypt_app_with_bfdecrypt(client, app)
+                attempt_clutch_first = True  # Just in case if clutch is secondly tried
+                bfdecrypt_attempted = True
+                ipa_path = decrypt_app_with_bfdecrypt(client, app)
 
-        if ipa_path:
-            print("Success")
-            if not multiple_apps and "BFDECRYPT" in app_data.decrypt_method:  # Revert plist
-                revert_plist(client)
+            if ipa_path:
+                print("Success")
+                if not multiple_apps and app_data.DumpUtility.BFDECRYPT.name in app_data.decrypt_method:  # Revert plist
+                    revert_plist(client)
 
-            print("Downloading... ", end="", flush=True)
-            downloaded = download_app(client, app, ipa_path)
-            if downloaded:
-                print("File saved as", downloaded)
-                break
+                print("Downloading... ", end="", flush=True)
+                downloaded = download_app(client, app, ipa_path)
+                if downloaded:
+                    print("File saved as", downloaded)
+                    break
+                else:
+                    print("Download failed!")
             else:
-                print("Download failed!")
-        else:
-            print(f"Error while decrypting ipa!")
+                print(f"Error while decrypting ipa!")
+    else:
+        print("Error modifying the bfdecrypt plist file!")
 
 
 def dump_multiple_apps(client: paramiko.SSHClient, apps: list):
-    if "BFDECRYPT" in app_data.decrypt_method:
-        modify_bfdecrypt_plist(client, apps)
+    modify_plist_success = True
+    if app_data.DumpUtility.BFDECRYPT.name in app_data.decrypt_method:
+        modify_plist_success = modify_bfdecrypt_plist(client, apps)
 
-    for app in apps:
-        dump_app(client, app, True)
+    if modify_plist_success:
+        for app in apps:
+            dump_app(client, app, True)
 
-    if "BFDECRYPT" in app_data.decrypt_method:
-        revert_plist(client)
+        if app_data.DumpUtility.BFDECRYPT.name in app_data.decrypt_method:
+            revert_plist(client)
+    else:
+        print("Error modifying the bfdecrypt plist file!")

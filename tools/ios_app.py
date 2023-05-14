@@ -23,6 +23,12 @@ BFDECRYPT_SETTINGS = "com.level3tjg.bfdecrypt.plist"
 BFDECRYPT_SETTINGS_F = BFDECRYPT_SETTINGS_PATH + BFDECRYPT_SETTINGS
 BFDECRYPT_IPA_NAME = "decrypted-app.ipa"
 
+ROOTLESS_PREFIX = "/var/jb"
+BIN_INSTALL_PATH = "/usr/local/bin/"
+LIB_INSTALL_PATH = "/usr/local/lib/"
+UIOPEN_NAME = "uiopen"
+UIOPEN_LOCAL_PATH = "uiopen_2.1.6-1"
+
 
 def is_there_any_cache() -> int:
     global LOCAL_CACHE_DIR

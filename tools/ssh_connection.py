@@ -1,5 +1,5 @@
 import pathlib
-
+import os
 import tools.bundle_management as bm
 import tools.app_data as app_data
 import tools.ios_app as ios_apps
@@ -16,12 +16,29 @@ from re import findall, sub
 
 # Utilities for connection
 
+is_rootless = False
+remote_bin_install_path = ""
+remote_lib_install_path = ""
+
 
 def connect(ip: str, username: str, password: str) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     client.connect(ip, username=username, password=password, timeout=30)
+
+    global is_rootless
+    global remote_bin_install_path
+    global remote_lib_install_path
+    ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"ls {ios_apps.ROOTLESS_PREFIX}")
+    output = read_output(ssh_stdout)
+    if output and len(output) > 0:
+        is_rootless = True
+        remote_bin_install_path = os.path.join(ios_apps.ROOTLESS_PREFIX, ios_apps.BIN_INSTALL_PATH)
+        remote_lib_install_path = os.path.join(ios_apps.ROOTLESS_PREFIX, ios_apps.LIB_INSTALL_PATH)
+    else:
+        remote_bin_install_path = ios_apps.BIN_INSTALL_PATH
+        remote_lib_install_path = ios_apps.LIB_INSTALL_PATH
 
     return client
 
@@ -272,6 +289,40 @@ def is_bfdecrypt_installed(client: paramiko.SSHClient) -> bool:
         else:
             return False
 
+def is_uiopen_installed(client: paramiko.SSHClient) -> bool:
+    ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"PATH={remote_bin_install_path}:$PATH uiopen --help")
+    output = read_output(ssh_stdout)
+
+    if "--bundleid" in output:
+        return True
+    else:
+        print(f"\nThe Procursus version of {ios_apps.UIOPEN_NAME} was not found on the device.")
+        print(f"1. Install it to {remote_bin_install_path}")
+        print("2. Cancel")
+        print("Select an option")
+        option = utils.choose(["1", "2"])
+
+        if option == "1":
+            client.exec_command(f"mkdir -p {remote_bin_install_path}")
+            client.exec_command(f"mkdir -p {remote_lib_install_path}")
+
+            sftp_client = client.open_sftp()
+            local_lib_path = os.path.join(ios_apps.UIOPEN_LOCAL_PATH, "lib")
+            for local_lib_file in os.listdir(local_lib_path):
+                lib_file = os.path.join(local_lib_path, local_lib_file)
+                if os.path.isfile(lib_file):
+                    sftp_client.put(lib_file, os.path.join(remote_lib_install_path, local_lib_file))
+            remote_uiopen_file = os.path.join(remote_bin_install_path, ios_apps.UIOPEN_NAME)
+            sftp_client.put(os.path.join(ios_apps.UIOPEN_LOCAL_PATH, ios_apps.UIOPEN_NAME), remote_uiopen_file)
+            fix_file_permissions(client, "u+x", remote_uiopen_file, use_sudo=is_rootless)
+            disconnect_sftp(sftp_client)
+            
+            return is_uiopen_installed(client)
+        elif option == "2":
+            return False
+        else:
+            return False
+
 
 def is_idevice_ready(client: paramiko.SSHClient) -> bool:
     check_clutch = app_data.DumpUtility.CLUTCH.name in app_data.decrypt_method
@@ -283,6 +334,8 @@ def is_idevice_ready(client: paramiko.SSHClient) -> bool:
 
     if check_bfdecrypt:
         ready = ready and is_bfdecrypt_installed(client)
+
+    ready = ready and is_uiopen_installed(client)
 
     return ready
 
@@ -434,35 +487,27 @@ def modify_bfdecrypt_plist(client: paramiko.SSHClient, apps: list) -> bool:
     success = False
     if utils.write_binary_file(bfdecrypt_settings, plistlib.dumps(file_content)):
         sftp_client.put(bfdecrypt_settings, ios_apps.BFDECRYPT_SETTINGS_F)
-        
-        attempts = 0
-        while attempts < len(ios_apps.MS_BFDECRYPT_SETTINGS_F):
-            ms_bfdecrypt_settings_f = ios_apps.MS_BFDECRYPT_SETTINGS_F[attempts]
-            try:
-                sftp_client.put(bfdecrypt_settings, ms_bfdecrypt_settings_f)
-                success = True
-                break
-            except FileNotFoundError:
-                attempts+=1
-            except PermissionError:
-                if fix_bfdecrypt_permissions(client, ms_bfdecrypt_settings_f):
-                    continue
-                else:
-                    break
+        success = True
 
     disconnect_sftp(sftp_client)
     return success
 
 
-def fix_bfdecrypt_permissions(client: paramiko.SSHClient, ms_bfdecrypt_settings_f: str) -> bool:
+def fix_file_permissions(client: paramiko.SSHClient, permissions: str, file_name: str, use_sudo: bool = False) -> bool:
+    if use_sudo:
+        sudo_str = "sudo "
+    else:
+        sudo_str = ""
+
     ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(
-        f"sudo chmod o+w {ms_bfdecrypt_settings_f}", get_pty=True
+        f"{sudo_str}chmod {permissions} {file_name}", get_pty=True
     )
 
-    print("\nEnter the sudo password")
-    password = getpass.getpass("> ")
-    ssh_stdin.write(password + '\n')
-    ssh_stdin.flush()
+    if use_sudo:
+        print("\nEnter the sudo password")
+        password = getpass.getpass("> ")
+        ssh_stdin.write(password + '\n')
+        ssh_stdin.flush()
 
     output = read_output(ssh_stderr)
     if output and len(output) > 0:
@@ -473,7 +518,7 @@ def fix_bfdecrypt_permissions(client: paramiko.SSHClient, ms_bfdecrypt_settings_
 def revert_plist(client: paramiko.SSHClient):  # Revert to avoid re-decrypting if user opens normally
     client.exec_command(f"killall Preferences")
     modify_bfdecrypt_plist(client, list())
-    client.exec_command(f"uiopen 'prefs:root=bfdecrypt'")
+    client.exec_command(f"PATH={remote_bin_install_path}:$PATH uiopen 'prefs:root=bfdecrypt'")
     sleep(3)
     client.exec_command(f"killall Preferences")
 
@@ -482,7 +527,7 @@ def decrypt_app_with_bfdecrypt(client: paramiko.SSHClient, app: ios_apps.AppInfo
     client.exec_command(f"killall \"{app.app_executable}\"")
     client.exec_command(f"killall Preferences")
     sleep(1)
-    client.exec_command(f"uiopen 'prefs:root=bfdecrypt'")
+    client.exec_command(f"PATH={remote_bin_install_path}:$PATH uiopen 'prefs:root=bfdecrypt'")
 
     documents_path = f"{ios_apps.APPLICATION_DOCUMENTS + app.docs_bundle_id}/Documents/"
 
@@ -492,7 +537,7 @@ def decrypt_app_with_bfdecrypt(client: paramiko.SSHClient, app: ios_apps.AppInfo
     decrypted = False
 
     sleep(3)
-    client.exec_command(f"uiopen --bundleid {app.app_bundle}")
+    client.exec_command(f"PATH={remote_bin_install_path}:$PATH uiopen --bundleid {app.app_bundle}")
 
     while retries < 30:
         ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"du {documents_path}/{ios_apps.BFDECRYPT_IPA_NAME}")

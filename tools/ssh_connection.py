@@ -19,6 +19,7 @@ from re import findall, sub
 is_rootless = False
 remote_bin_install_path = ""
 remote_lib_install_path = ""
+bfdecrypt_settings_f = ""
 
 
 def connect(ip: str, username: str, password: str) -> paramiko.SSHClient:
@@ -30,15 +31,18 @@ def connect(ip: str, username: str, password: str) -> paramiko.SSHClient:
     global is_rootless
     global remote_bin_install_path
     global remote_lib_install_path
+    global bfdecrypt_settings_f
     ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"ls {ios_apps.ROOTLESS_PREFIX}")
     output = read_output(ssh_stdout)
     if output and len(output) > 0:
         is_rootless = True
         remote_bin_install_path = os.path.join(ios_apps.ROOTLESS_PREFIX, ios_apps.BIN_INSTALL_PATH)
         remote_lib_install_path = os.path.join(ios_apps.ROOTLESS_PREFIX, ios_apps.LIB_INSTALL_PATH)
+        bfdecrypt_settings_f = ios_apps.BFDECRYPT_SETTINGS_PATH_ROOTLESS + ios_apps.BFDECRYPT_SETTINGS
     else:
         remote_bin_install_path = ios_apps.BIN_INSTALL_PATH
         remote_lib_install_path = ios_apps.LIB_INSTALL_PATH
+        bfdecrypt_settings_f = ios_apps.BFDECRYPT_SETTINGS_PATH + ios_apps.BFDECRYPT_SETTINGS
 
     return client
 
@@ -475,7 +479,7 @@ def modify_bfdecrypt_plist(client: paramiko.SSHClient, apps: list) -> bool:
 
     bfdecrypt_settings = ios_apps.LOCAL_CACHE_DIR.joinpath(ios_apps.BFDECRYPT_SETTINGS)
 
-    settings_file = sftp_client.open(ios_apps.BFDECRYPT_SETTINGS_F, "rb")
+    settings_file = sftp_client.open(bfdecrypt_settings_f, "rb")
     utils.write_binary_file(bfdecrypt_settings, settings_file.read())
 
     file_content = utils.read_plist_file(bfdecrypt_settings)
@@ -486,7 +490,7 @@ def modify_bfdecrypt_plist(client: paramiko.SSHClient, apps: list) -> bool:
 
     success = False
     if utils.write_binary_file(bfdecrypt_settings, plistlib.dumps(file_content)):
-        sftp_client.put(bfdecrypt_settings, ios_apps.BFDECRYPT_SETTINGS_F)
+        sftp_client.put(bfdecrypt_settings, bfdecrypt_settings_f)
         success = True
 
     disconnect_sftp(sftp_client)

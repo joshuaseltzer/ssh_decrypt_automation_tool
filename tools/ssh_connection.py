@@ -532,17 +532,15 @@ def decrypt_app_with_bfdecrypt(client: paramiko.SSHClient, app: ios_apps.AppInfo
     client.exec_command(f"killall Preferences")
     sleep(1)
     client.exec_command(f"PATH={remote_bin_install_path}:$PATH uiopen 'prefs:root=bfdecrypt'")
+    sleep(3)
+    client.exec_command(f"PATH={remote_bin_install_path}:$PATH uiopen --bundleid {app.app_bundle}")
+    sleep(3)
 
     documents_path = f"{ios_apps.APPLICATION_DOCUMENTS + app.docs_bundle_id}/Documents/"
-
     retries = 0
     last_ipa_size = 0
     consecutive_same_sizes = 0
     decrypted = False
-
-    sleep(3)
-    client.exec_command(f"PATH={remote_bin_install_path}:$PATH uiopen --bundleid {app.app_bundle}")
-
     while retries < 30:
         ssh_stdin, ssh_stdout, ssh_stderr = client.exec_command(f"du {documents_path}/{ios_apps.BFDECRYPT_IPA_NAME}")
         s_output = read_output(ssh_stdout)
@@ -555,7 +553,11 @@ def decrypt_app_with_bfdecrypt(client: paramiko.SSHClient, app: ios_apps.AppInfo
                     break
             else:
                 last_ipa_size = int(next_ipa_size[0])
-            print(f"File size: {int(next_ipa_size[0])}")
+            print(f"  Decrypted IPA File Size: {int(next_ipa_size[0])}")
+        else:
+            print(f"  Decrypted IPA file \"{ios_apps.BFDECRYPT_IPA_NAME}\" not found...")
+            if retries > 2:
+                break
         retries+=1
         sleep(3)
 

@@ -80,13 +80,13 @@ $ git clone https://github.com/cdelaof26/ssh_decrypt_automation_tool.git
 # Rename "com.level3tjg.bfdecrypt.deb" as "bfdecrypt.deb"
 </pre>
 
-- Move into project directory
+- Move into the project directory
 
 <pre>
 $ cd ssh_decrypt_automation_tool
 </pre>
 
-- Install dependencies
+- Install the Python dependencies
 <pre>
 # You might need elevated privileges!
 
@@ -95,7 +95,7 @@ $ pip install -r requirements.txt
 $ pip3 install -r requirements.txt
 </pre>
 
-Run using python
+- Run the tool using Python
 
 <pre>
 # If you're on Linux or macOS

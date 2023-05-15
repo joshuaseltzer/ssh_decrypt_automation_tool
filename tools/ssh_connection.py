@@ -236,9 +236,9 @@ def install_bfdecrypt(client: paramiko.SSHClient) -> bool:
     )
 
     output = read_output(ssh_stderr)
-    if "com.spark.libsparkapplist" in output:
+    if "com.opa334.altlist" in output:
         print("Failed!")
-        print("    \"libsparkapplist\" is required!")
+        print("    \"altList\" is required!")
         print("        If you need assistance, please check README.md")
         client.exec_command("dpkg --remove com.level3tjg.bfdecrypt")
         return False

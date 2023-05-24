@@ -13,7 +13,25 @@ parser = argparse.ArgumentParser(description="This tool automates the process of
 parser.add_argument(
     "-a",
     "--app_bundle_id",
-    help="Specify a single application bundle ID (e.g. com.google.ios.youtube) to automatically decrypt. When this option is not specified, the tool is launched in interactive mode. Note: this option is only valid when using saved device settings.",
+    help="The application bundle ID (e.g. com.google.ios.youtube) that you would like to decrypt. When this option is not specified, the tool is launched in interactive mode. Note: this option is only valid when specifying the ip_address, username, and password arguments or if saved settings for an existing device already exist.",
+    type=str
+)
+parser.add_argument(
+    "-i",
+    "--ip_address",
+    help="The IP address of the device to connect to when decrypting the specified app_bundle_id. Note: this option will override the saved IP address for future uses of this tool.",
+    type=str
+)
+parser.add_argument(
+    "-u",
+    "--username",
+    help="The SSH username to use when decrypting the specified app_bundle_id. Note: this option will override the saved username for future uses of this tool. The password argument is required if this argument is used.",
+    type=str
+)
+parser.add_argument(
+    "-p",
+    "--password",
+    help="The SSH password to use when decrypting the specified app_bundle_id. Note: this option will override the saved password for future uses of this tool. The username argument is required when this argument is used.",
     type=str
 )
 parser.add_argument(
@@ -31,6 +49,10 @@ parser.add_argument(
 args = parser.parse_args()
 if args.app_bundle_id:
     auto_dump = True
+    if args.ip_address:
+        settings.save_ip_file(args.ip_address)
+    if args.username and args.password:
+        settings.save_up_file(args.username, args.password)
     if args.bfdecrypt and args.clutch:
         settings.select_decrypt_utility("4")
     elif args.bfdecrypt:

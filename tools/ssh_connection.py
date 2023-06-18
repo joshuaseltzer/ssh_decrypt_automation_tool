@@ -476,13 +476,15 @@ def decrypt_app_with_clutch(client: paramiko.SSHClient, app: ios_apps.AppInfo) -
 
 def modify_bfdecrypt_plist(client: paramiko.SSHClient, apps: list) -> bool:
     sftp_client = client.open_sftp()
-
     bfdecrypt_settings = ios_apps.LOCAL_CACHE_DIR.joinpath(ios_apps.BFDECRYPT_SETTINGS)
 
-    settings_file = sftp_client.open(bfdecrypt_settings_f, "rb")
-    utils.write_binary_file(bfdecrypt_settings, settings_file.read())
-
-    file_content = utils.read_plist_file(bfdecrypt_settings)
+    try:
+        settings_file = sftp_client.open(bfdecrypt_settings_f, "rb")
+        utils.write_binary_file(bfdecrypt_settings, settings_file.read())
+        file_content = utils.read_plist_file(bfdecrypt_settings)
+    except FileNotFoundError:
+        file_content = {}
+    
     selected_apps = []
     for app in apps:
         selected_apps.append(app.app_bundle)

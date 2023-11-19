@@ -412,7 +412,7 @@ def link_documents_plist(listed_applications: list, documents_plists: list):
         contents = utils.read_plist_file(local_plist_path)
 
         for app in listed_applications:
-            if contents["MCMMetadataIdentifier"] == app.app_bundle:
+            if contents.get("MCMMetadataIdentifier", "") == app.app_bundle:
                 app.docs_bundle_id = local_plist_path.name.replace(".plist", "").replace("d_", "")
 
 
